@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Species, ConservationStatus, getStatusLabel, getAllSpeciesData } from '@/data/species';
+import { Species, ConservationStatus, getStatusLabel } from '@/data/species';
 export type { Species } from '@/data/species';
 
 interface ApiSpecies {
@@ -8,7 +8,7 @@ interface ApiSpecies {
   symbol?: string;
   code?: string;
   status?: string;
-  iucnStatus?: ConservationStatus;
+  iucnStatus?: string;
   rarity?: string;
   image?: string;
   scientificName?: string;
@@ -23,46 +23,98 @@ interface ApiSpecies {
     name: string;
     decimals: number;
   };
-  chainId?: number;
-  tradable?: boolean;
-  marketCap?: number;
+  chainId?: number | string;
+  tradable?: boolean | string;
+  marketCap?: number | string;
   marketCapFormatted?: string;
-  holders?: number;
-  circulatingSupply?: number;
-  totalSupply?: number;
+  holders?: number | string;
+  circulatingSupply?: number | string;
+  totalSupply?: number | string;
 }
 
 interface ApiResponse {
   data: ApiSpecies[];
 }
 
-// Map API status strings to IUCN codes
-const mapStatusToCode = (status?: string, iucnStatus?: ConservationStatus): ConservationStatus => {
-  if (iucnStatus) return iucnStatus;
-  if (!status) return 'VU';
-  
-  const statusLower = status.toLowerCase();
-  if (statusLower.includes('critically')) return 'CR';
-  if (statusLower.includes('endangered')) return 'EN';
-  if (statusLower.includes('vulnerable')) return 'VU';
-  if (statusLower.includes('near')) return 'NT';
-  if (statusLower.includes('least')) return 'LC';
-  if (statusLower.includes('data')) return 'DD';
-  if (statusLower.includes('extinct') && statusLower.includes('wild')) return 'EW';
-  if (statusLower.includes('extinct')) return 'EX';
+const IUCN_CODES: ConservationStatus[] = ['CR', 'EN', 'VU', 'NT', 'LC', 'DD', 'NE', 'EW', 'EX'];
+
+// Map API status to an IUCN code. The text label is checked first because the
+// API's iucnStatus code is wrong for some species (e.g. "LE" for Least Concern,
+// "NE" for Near Threatened, "EX" for Extinct in the Wild).
+const mapStatusToCode = (status?: string, iucnStatus?: string): ConservationStatus => {
+  if (status) {
+    const statusLower = status.toLowerCase();
+    // "Near Extinct" isn't an IUCN category; it's used for Vaquita and Hawksbill, both CR
+    if (statusLower.includes('critically') || statusLower.includes('near extinct')) return 'CR';
+    if (statusLower.includes('endangered')) return 'EN';
+    if (statusLower.includes('vulnerable')) return 'VU';
+    if (statusLower.includes('near')) return 'NT';
+    if (statusLower.includes('least')) return 'LC';
+    if (statusLower.includes('data')) return 'DD';
+    if (statusLower.includes('extinct') && statusLower.includes('wild')) return 'EW';
+    if (statusLower.includes('extinct')) return 'EX';
+    if (statusLower.includes('not evaluated')) return 'NE';
+  }
+  const code = iucnStatus?.toUpperCase();
+  if (code === 'LE') return 'LC';
+  if (code === 'DA') return 'DD';
+  if (code && (IUCN_CODES as string[]).includes(code)) return code as ConservationStatus;
   return 'NE';
 };
 
-// Generate dummy description based on species name
-const generateDescription = (name: string): string => {
-  const descriptions = [
-    `The ${name} is a remarkable species that plays a vital role in its ecosystem.`,
-    `Known for its unique characteristics, the ${name} faces significant conservation challenges.`,
-    `The ${name} represents one of nature's most fascinating creatures, now protected under conservation efforts.`,
-    `A symbol of biodiversity, the ${name} continues to inspire conservation action worldwide.`,
-  ];
-  return descriptions[Math.floor(Math.random() * descriptions.length)];
+const toNumber = (v?: number | string): number | undefined => {
+  if (v === undefined || v === null || v === '') return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
 };
+
+const mapApiSpecies = (apiSpecies: ApiSpecies[]): Species[] =>
+  apiSpecies.map((s, index) => {
+    // Numeric ID from "FCBC #190" / "FCBC 190", else from symbol "FCBC190"
+    const fcbcId =
+      s.id?.match(/(\d+)/)?.[1] ||
+      s.symbol?.match(/(\d+)/)?.[1] ||
+      String(index + 1);
+
+    const symbol = s.symbol || `FCBC${fcbcId}`;
+    const iucnCode = mapStatusToCode(s.status, s.iucnStatus);
+
+    return {
+      // Identity & Token
+      id: `FCBC #${fcbcId}`,
+      name: s.name,
+      symbol,
+      code: s.code || symbol,
+
+      // Conservation
+      status: iucnCode,
+      statusLabel: s.status || getStatusLabel(iucnCode),
+      rarity: s.rarity || 'Unknown',
+
+      // Media
+      image: s.image || '',
+
+      // Display fields
+      scientificName: s.scientificName || '',
+      ticker: `$${symbol}`,
+      population: s.population || 'Unknown',
+      region: s.region || 'Unknown',
+      votes: 0, // real counts come from useSpeciesStats
+      description: s.description || '',
+
+      // Zora/Onchain data
+      tokenAddress: s.tokenAddress,
+      poolCurrencyToken: s.poolCurrencyToken,
+      chainId: toNumber(s.chainId),
+      // If tokenAddress exists, it's tradable (API tradable field may be outdated)
+      tradable: !!s.tokenAddress,
+      marketCap: toNumber(s.marketCap),
+      marketCapFormatted: s.marketCapFormatted,
+      holders: toNumber(s.holders),
+      circulatingSupply: toNumber(s.circulatingSupply),
+      totalSupply: toNumber(s.totalSupply),
+    };
+  });
 
 const SPECIES_API_URL = 'https://server.fcbc.fun/api/v1/zora/species?count=1234';
 const FETCH_TIMEOUT_MS = 15000;
@@ -78,8 +130,8 @@ const fetchSpeciesJson = async (): Promise<ApiSpecies[]> => {
       throw new Error(`Species API returned HTTP ${response.status}`);
     }
     const json: ApiResponse = await response.json();
-    if (!json || !Array.isArray(json.data)) {
-      throw new Error('Species API response has no data array');
+    if (!json || !Array.isArray(json.data) || json.data.length === 0) {
+      throw new Error('Species API returned no species');
     }
     return json.data;
   } catch (err) {
@@ -96,17 +148,31 @@ const fetchSpeciesJson = async (): Promise<ApiSpecies[]> => {
   }
 };
 
+// Saved copy of the real species list (no market data), used when the API is down.
+// Loaded on demand so it isn't in the main bundle.
+// Regenerate with: node scripts/build_species_snapshot.mjs <api-response.json>
+const loadSnapshot = async (): Promise<{ snapshotDate: string; species: Species[] }> => {
+  const mod = await import('@/data/purebreedsSnapshot.json');
+  const snapshot = mod.default as { snapshotDate: string; data: ApiSpecies[] };
+  return { snapshotDate: snapshot.snapshotDate, species: mapApiSpecies(snapshot.data) };
+};
+
 export const useSpeciesApi = () => {
   const [species, setSpecies] = useState<Species[]>([]);
   const [total, setTotal] = useState(0);
   const [onchain, setOnchain] = useState(0);
   const [loading, setLoading] = useState(true);
+  // Why the live fetch failed (null when live data loaded)
   const [error, setError] = useState<string | null>(null);
+  // Set when showing the saved snapshot instead of live data
+  const [snapshotDate, setSnapshotDate] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
 
   const refetch = useCallback(() => setAttempt(a => a + 1), []);
 
   useEffect(() => {
+    let cancelled = false;
+
     const fetchSpecies = async () => {
       setLoading(true);
       setError(null);
@@ -118,86 +184,36 @@ export const useSpeciesApi = () => {
           console.warn('Species fetch failed, retrying once:', firstErr);
           apiSpecies = await fetchSpeciesJson();
         }
-
-        const mappedSpecies: Species[] = apiSpecies.map((s, index) => {
-          // Extract numeric ID from "FCBC #190" format or use symbol
-          let fcbcId: string;
-          if (s.id) {
-            // Extract number from "FCBC #190" -> "190"
-            const match = s.id.match(/#(\d+)/);
-            fcbcId = match ? match[1] : (s.symbol?.match(/(\d+)/)?.[1] || s.id.replace(/\D/g, '') || String(index + 1));
-          } else if (s.symbol) {
-            // Extract number from symbol like "FCBC190" -> "190"
-            const symbolMatch = s.symbol.match(/(\d+)/);
-            fcbcId = symbolMatch ? symbolMatch[1] : String(index + 1);
-          } else {
-            fcbcId = String(index + 1);
-          }
-          
-          const symbol = s.symbol || `FCBC${fcbcId}`;
-          const code = s.code || symbol;
-          const iucnCode = mapStatusToCode(s.status, s.iucnStatus);
-          
-          return {
-            // Identity & Token
-            id: `FCBC #${fcbcId}`,
-            name: s.name,
-            symbol: symbol,
-            code: code,
-            
-            // Conservation
-            status: iucnCode,
-            statusLabel: s.status || getStatusLabel(iucnCode),
-            rarity: s.rarity || ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary'][index % 5],
-            
-            // Media
-            image: s.image || '',
-            
-            // Legacy/Display fields
-            scientificName: s.scientificName || 'Species name',
-            ticker: `$${symbol}`,
-            population: s.population || 'Unknown',
-            region: s.region || 'Unknown',
-            votes: Math.floor(Math.random() * 3000),
-            description: s.description || generateDescription(s.name),
-            
-            // Zora/Onchain data
-            tokenAddress: s.tokenAddress,
-            poolCurrencyToken: s.poolCurrencyToken,
-            chainId: s.chainId,
-            // If tokenAddress exists, it's tradable (API tradable field may be outdated)
-            tradable: s.tokenAddress ? true : (s.tradable || false),
-            marketCap: s.marketCap,
-            marketCapFormatted: s.marketCapFormatted,
-            holders: s.holders,
-            circulatingSupply: s.circulatingSupply,
-            totalSupply: s.totalSupply,
-          };
-        });
-
-        // Merge with additional dummy species if we need more to fill the grid
-        const allDummySpecies = getAllSpeciesData();
-        const combinedSpecies = mappedSpecies.length < 75 
-          ? [...mappedSpecies, ...allDummySpecies.slice(mappedSpecies.length).slice(0, 75 - mappedSpecies.length)]
-          : mappedSpecies;
-
-        setSpecies(combinedSpecies);
+        if (cancelled) return;
+        const mapped = mapApiSpecies(apiSpecies);
+        setSpecies(mapped);
+        setSnapshotDate(null);
         setTotal(1234);
-        setOnchain(combinedSpecies.length);
+        setOnchain(mapped.length);
       } catch (err) {
-        console.error('Failed to fetch species:', err);
+        console.error('Failed to fetch species, using saved snapshot:', err);
+        if (cancelled) return;
         setError(err instanceof Error ? err.message : 'Failed to load species data');
-        const allDummySpecies = getAllSpeciesData();
-        setSpecies(allDummySpecies.slice(0, 75));
-        setTotal(1234);
-        setOnchain(allDummySpecies.length);
+        try {
+          const snapshot = await loadSnapshot();
+          if (cancelled) return;
+          setSpecies(snapshot.species);
+          setSnapshotDate(snapshot.snapshotDate);
+          setTotal(1234);
+          setOnchain(snapshot.species.length);
+        } catch (snapshotErr) {
+          console.error('Failed to load species snapshot:', snapshotErr);
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     fetchSpecies();
+    return () => {
+      cancelled = true;
+    };
   }, [attempt]);
 
-  return { species, total, onchain, loading, error, refetch };
+  return { species, total, onchain, loading, error, snapshotDate, refetch };
 };
