@@ -9,15 +9,21 @@ interface SpeciesStats {
   last_viewed_at: string | null;
 }
 
+const STATS_TIMEOUT_MS = 8000;
+
 export const useSpeciesStats = () => {
   const [stats, setStats] = useState<Record<string, SpeciesStats>>({});
   const [loading, setLoading] = useState(true);
 
   const fetchStats = useCallback(async () => {
+    // Don't let a slow or unreachable database keep the grid on a spinner forever
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), STATS_TIMEOUT_MS);
     try {
       const { data, error } = await supabase
         .from('species_stats')
-        .select('*');
+        .select('*')
+        .abortSignal(controller.signal);
 
       if (error) throw error;
 
@@ -29,6 +35,7 @@ export const useSpeciesStats = () => {
     } catch (err) {
       console.error('Error fetching species stats:', err);
     } finally {
+      clearTimeout(timer);
       setLoading(false);
     }
   }, []);

@@ -18,7 +18,7 @@ import { cn } from '@/lib/utils';
 
 const Explore = () => {
   const navigate = useNavigate();
-  const { species, loading, error } = useSpeciesApi();
+  const { species, loading, error, refetch } = useSpeciesApi();
   const { recordView, getBaseSquares, getLastViewedAt, loading: statsLoading, stats } = useSpeciesStats();
   const [animationEnabled, setAnimationEnabled] = useState(false); // Default off for electric grids
   const [soundEnabled, setSoundEnabled] = useState(false);
@@ -248,6 +248,12 @@ const Explore = () => {
           ) : error ? (
             <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
               <p className="text-sm text-destructive font-sans">Error loading species: {error}</p>
+              <button
+                onClick={refetch}
+                className="px-4 py-2 rounded-lg border border-border bg-card text-sm font-sans hover:bg-muted active:bg-muted"
+              >
+                Retry
+              </button>
             </div>
           ) : sortedSpecies.length === 0 ? (
             <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">

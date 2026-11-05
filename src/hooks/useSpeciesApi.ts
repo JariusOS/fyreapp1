@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Species, ConservationStatus, getStatusLabel, getAllSpeciesData } from '@/data/species';
 export type { Species } from '@/data/species';
 
@@ -64,24 +64,62 @@ const generateDescription = (name: string): string => {
   return descriptions[Math.floor(Math.random() * descriptions.length)];
 };
 
+const SPECIES_API_URL = 'https://server.fcbc.fun/api/v1/zora/species?count=1234';
+const FETCH_TIMEOUT_MS = 15000;
+
+// Fetch the species list, failing with a readable reason instead of hanging
+// or throwing on a non-JSON error page.
+const fetchSpeciesJson = async (): Promise<ApiSpecies[]> => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(SPECIES_API_URL, { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`Species API returned HTTP ${response.status}`);
+    }
+    const json: ApiResponse = await response.json();
+    if (!json || !Array.isArray(json.data)) {
+      throw new Error('Species API response has no data array');
+    }
+    return json.data;
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error(`Species API timed out after ${FETCH_TIMEOUT_MS / 1000}s`);
+    }
+    if (err instanceof TypeError) {
+      // fetch() rejects with TypeError on DNS, CORS and connection failures
+      throw new Error('Could not reach the species API (network or CORS error)');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 export const useSpeciesApi = () => {
   const [species, setSpecies] = useState<Species[]>([]);
   const [total, setTotal] = useState(0);
   const [onchain, setOnchain] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+
+  const refetch = useCallback(() => setAttempt(a => a + 1), []);
 
   useEffect(() => {
     const fetchSpecies = async () => {
+      setLoading(true);
+      setError(null);
       try {
-        const response = await fetch('https://server.fcbc.fun/api/v1/zora/species?count=1234');
-        const json: ApiResponse = await response.json();
-        
-        if (!json || !json.data) {
-          throw new Error('Invalid FCBC API response');
+        let apiSpecies: ApiSpecies[];
+        try {
+          apiSpecies = await fetchSpeciesJson();
+        } catch (firstErr) {
+          console.warn('Species fetch failed, retrying once:', firstErr);
+          apiSpecies = await fetchSpeciesJson();
         }
 
-        const mappedSpecies: Species[] = json.data.map((s, index) => {
+        const mappedSpecies: Species[] = apiSpecies.map((s, index) => {
           // Extract numeric ID from "FCBC #190" format or use symbol
           let fcbcId: string;
           if (s.id) {
@@ -148,7 +186,7 @@ export const useSpeciesApi = () => {
         setOnchain(combinedSpecies.length);
       } catch (err) {
         console.error('Failed to fetch species:', err);
-        setError('Failed to load species data');
+        setError(err instanceof Error ? err.message : 'Failed to load species data');
         const allDummySpecies = getAllSpeciesData();
         setSpecies(allDummySpecies.slice(0, 75));
         setTotal(1234);
@@ -159,7 +197,7 @@ export const useSpeciesApi = () => {
     };
 
     fetchSpecies();
-  }, []);
+  }, [attempt]);
 
-  return { species, total, onchain, loading, error };
+  return { species, total, onchain, loading, error, refetch };
 };
