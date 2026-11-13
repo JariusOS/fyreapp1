@@ -18,7 +18,7 @@ import { cn } from '@/lib/utils';
 
 const Explore = () => {
   const navigate = useNavigate();
-  const { species, loading, error } = useSpeciesApi();
+  const { species, loading, error, snapshotDate, refetch } = useSpeciesApi();
   const { recordView, getBaseSquares, getLastViewedAt, loading: statsLoading, stats } = useSpeciesStats();
   const [animationEnabled, setAnimationEnabled] = useState(false); // Default off for electric grids
   const [soundEnabled, setSoundEnabled] = useState(false);
@@ -238,6 +238,14 @@ const Explore = () => {
       <main className="flex-1 overflow-y-auto overflow-x-hidden w-full min-h-0">
         {/* Species Grid - reduced padding for footer visibility */}
         <div className="w-full overflow-x-hidden px-2 sm:px-4 py-2 pb-[5em]">
+          {!loading && snapshotDate && (
+            <div className="flex items-center justify-between gap-2 mb-2 px-3 py-2 rounded-lg border border-border bg-muted/50 text-xs font-sans text-muted-foreground">
+              <span>Live data unavailable. Showing saved species list from {snapshotDate}; market cap and holders are hidden.</span>
+              <button onClick={refetch} className="shrink-0 underline text-foreground">
+                Retry
+              </button>
+            </div>
+          )}
           {loading || (statsLoading && sortBy === 'votes') ? (
             <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
@@ -245,9 +253,15 @@ const Explore = () => {
                 {loading ? 'Loading species...' : 'Loading stats and organizing data...'}
               </p>
             </div>
-          ) : error ? (
+          ) : error && species.length === 0 ? (
             <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
               <p className="text-sm text-destructive font-sans">Error loading species: {error}</p>
+              <button
+                onClick={refetch}
+                className="px-4 py-2 rounded-lg border border-border bg-card text-sm font-sans hover:bg-muted active:bg-muted"
+              >
+                Retry
+              </button>
             </div>
           ) : sortedSpecies.length === 0 ? (
             <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
